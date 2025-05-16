@@ -13,16 +13,19 @@ import json
 import time
 import logging
 import argparse
+import subprocess
 import matplotlib.pyplot as plt
 import geopandas as gpd
 import contextily as cx
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from shapely.geometry import shape, box
+from shapely.geometry import shape, box, mapping
+from shapely.ops import unary_union
 
 from .boundaries import find_intersecting_datasets
 from .download import download_lidar_data, merge_laz_files, get_point_count
 from .config import load_config
+from .visualization import create_coverage_map, verify_dataset_coverage
 
 # Set up logging
 logging.basicConfig(
@@ -31,168 +34,6 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
-
-
-def create_visualization(boundary_geojson: Dict[str, Any], datasets: List[Dict[str, Any]],
-                         output_path: str) -> None:
-    """
-    Create a visualization showing the input boundary and intersecting USGS LiDAR datasets.
-
-    Args:
-        boundary_geojson: The input GeoJSON boundary
-        datasets: List of intersecting datasets with geometries
-        output_path: Path to save the visualization image
-    """
-    try:
-        logger.info(f"Creating visualization at {output_path}")
-
-        # Create a figure and axis with good size for readability
-        fig, ax = plt.subplots(figsize=(12, 10))
-
-        # Extract and prepare the input boundary
-        boundary_gdf = None
-        if boundary_geojson.get('type') == 'FeatureCollection':
-            boundary_gdf = gpd.GeoDataFrame.from_features(boundary_geojson)
-        elif boundary_geojson.get('type') == 'Feature':
-            boundary_gdf = gpd.GeoDataFrame(
-                geometry=[shape(boundary_geojson['geometry'])])
-        elif boundary_geojson.get('type') in ['Polygon', 'MultiPolygon']:
-            boundary_gdf = gpd.GeoDataFrame(geometry=[shape(boundary_geojson)])
-            
-        # Set CRS to WGS84 (EPSG:4326) if not already set
-        if boundary_gdf is not None and boundary_gdf.crs is None:
-            boundary_gdf.crs = "EPSG:4326"
-            
-        # Convert to Web Mercator for use with contextily basemap
-        boundary_gdf_webmerc = boundary_gdf.to_crs("EPSG:3857")
-
-        # Lists to keep track of legend elements
-        legend_elements = []
-
-        # Get dataset geometries and clip them to the boundary for visualization
-        from shapely.ops import unary_union
-        
-        colors = ['#FF6B6B', '#4ECDC4', '#FFE66D', '#1A535C', 
-                  '#F7B267', '#A06CD5', '#3BCEAC', '#BB4430']
-        
-        # Store dataset geometries with their metadata for processing
-        dataset_geometries = []
-        boundary_geometry = None
-        
-        # Extract boundary geometry
-        if boundary_gdf is not None:
-            boundary_geometry = boundary_gdf.geometry.iloc[0]
-        
-        # Process all datasets first to prepare for plotting
-        for i, dataset in enumerate(datasets):
-            if 'geometry' in dataset:
-                dataset_geometry = shape(dataset['geometry'])
-                
-                # If we have a boundary, clip the dataset to it
-                if boundary_geometry is not None:
-                    try:
-                        # Intersect dataset with boundary to only show relevant parts
-                        # Using the & operator which is equivalent to intersection
-                        clipped_geometry = dataset_geometry & boundary_geometry
-                        if not clipped_geometry.is_empty:
-                            dataset_geometries.append({
-                                'geometry': clipped_geometry,
-                                'year': dataset.get('year', 'Unknown'),
-                                'name': dataset.get('name', f'Dataset {i+1}'),
-                                'color': colors[i % len(colors)]
-                            })
-                    except Exception as e:
-                        logger.warning(f"Failed to clip dataset {dataset.get('name')}: {str(e)}")
-                        # Fall back to using the original geometry
-                        dataset_geometries.append({
-                            'geometry': dataset_geometry,
-                            'year': dataset.get('year', 'Unknown'),
-                            'name': dataset.get('name', f'Dataset {i+1}'),
-                            'color': colors[i % len(colors)]
-                        })
-                else:
-                    dataset_geometries.append({
-                        'geometry': dataset_geometry,
-                        'year': dataset.get('year', 'Unknown'),
-                        'name': dataset.get('name', f'Dataset {i+1}'),
-                        'color': colors[i % len(colors)]
-                    })
-        
-        # Sort by year (oldest first, so newest will be on top)
-        dataset_geometries.sort(key=lambda x: x['year'])
-        
-        # Plot each dataset
-        for dataset_info in dataset_geometries:
-            # Create GeoDataFrame
-            gdf = gpd.GeoDataFrame(geometry=[dataset_info['geometry']])
-            
-            # Set CRS to WGS84 (EPSG:4326) if not already set
-            if gdf.crs is None:
-                gdf.crs = "EPSG:4326"
-            
-            # Convert to Web Mercator
-            gdf_webmerc = gdf.to_crs("EPSG:3857")
-            
-            # Plot with semi-transparency to show overlap areas
-            color = dataset_info['color']
-            label = f"{dataset_info['name']} ({dataset_info['year']})"
-            
-            gdf_webmerc.plot(ax=ax, color=color, alpha=0.5,
-                            edgecolor=color, linewidth=1.5)
-            
-            # Add to legend
-            from matplotlib.patches import Patch
-            legend_elements.append(Patch(facecolor=color, alpha=0.5,
-                                        edgecolor=color, label=label))
-
-        # Now plot the input boundary on top with higher z-order
-        if boundary_gdf is not None:
-            boundary_gdf_webmerc.plot(ax=ax, color='none', edgecolor='black', linewidth=3,
-                                      zorder=10)  # Higher zorder to make sure it's on top
-            
-            # Add to legend elements
-            from matplotlib.lines import Line2D
-            legend_elements.insert(
-                0, Line2D([0], [0], color='black', lw=3, label='Input Boundary'))
-            
-            # Set the map extent to focus on the user's boundary (with a small buffer)
-            minx, miny, maxx, maxy = boundary_gdf_webmerc.total_bounds
-            buffer = max((maxx - minx), (maxy - miny)) * 0.1  # 10% buffer
-            ax.set_xlim(minx - buffer, maxx + buffer)
-            ax.set_ylim(miny - buffer, maxy + buffer)
-            
-            # Add OpenStreetMap basemap with controlled zoom level (19 is max for OpenStreetMap)
-            cx.add_basemap(ax, source=cx.providers.OpenStreetMap.Mapnik, zoom=18, attribution_size=8)
-
-        # Add the legend with all elements
-        ax.legend(handles=legend_elements, loc='best', fontsize=10,
-                  title="Data Sources", title_fontsize=12)
-
-        # Add title and clean styling
-        plt.title('USGS LiDAR Coverage for Input Boundary', fontsize=16)
-        # Remove axis labels entirely instead of setting fontsize to 0
-        ax.set_xlabel('')
-        ax.set_ylabel('')
-        # Remove tick labels
-        ax.set_xticklabels([])
-        ax.set_yticklabels([])
-
-        # Add grid lines
-        ax.grid(True, linestyle='--', alpha=0.5)
-
-        # Improve layout
-        plt.tight_layout()
-
-        # Save the figure
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        plt.close()
-
-        logger.info(f"Visualization saved to {output_path}")
-
-    except Exception as e:
-        logger.error(f"Error creating visualization: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
 
 
 def main():
@@ -214,8 +55,12 @@ def main():
     )
     parser.add_argument(
         "--resolution", "-r", type=str,
-        help="Resolution to use for the data. Use 'full' for native resolution, "
-             "or specify a numeric value (default: use resolution from config)"
+        help="Resolution to use for the data in Entwine Point Tile (EPT) format. "
+             "Use 'full' for native resolution (all points), or specify a numeric value "
+             "in coordinate units (meters) to control point spacing. For example, "
+             "'1.0' will retrieve points with ~1m spacing, '0.5' creates denser point clouds, "
+             "and '2.0' creates sparser data. Lower values = more detail and larger files. "
+             "(default: use resolution from config)"
     )
     parser.add_argument(
         "--workers", "-w", type=int,
@@ -235,12 +80,19 @@ def main():
     )
     parser.add_argument(
         "--most-recent", action="store_true",
-        help="Use only the most recent data when multiple datasets overlap"
+        help="Use the most recent dataset as primary source, then fill gaps with older datasets. "
+             "Gaps are determined by the actual geometry coverage of the most recent dataset. "
+             "Areas not covered by newer datasets will be filled with data from older datasets."
     )
     parser.add_argument(
         "--no-visualization", action="store_true",
         help="Skip creating visualization of datasets and boundary"
     )
+    parser.add_argument(
+        "--classify-ground", action="store_true",
+        help="Apply SMRF ground classification to point clouds during download"
+    )
+    # Removed the --coverage-method option as requested
     
     args = parser.parse_args()
     
@@ -268,6 +120,9 @@ def main():
             config["resolution"] = args.resolution
         if args.workers:
             config["download_workers"] = args.workers
+        if args.classify_ground:
+            config["classify_ground"] = True
+        # Coverage method removed - simplified approach used
         
         # Load the input GeoJSON
         with open(args.geojson, 'r') as f:
@@ -287,11 +142,33 @@ def main():
         logger.info(f"Found {len(datasets)} intersecting datasets")
         for i, dataset in enumerate(datasets, 1):
             logger.info(f"  {i}. {dataset['name']} ({dataset.get('year', 'Unknown year')})")
-        
+            
         # Create visualization of the boundary and dataset geometries
-        if not args.no_visualization and not args.dry_run:
+        if not args.no_visualization:
             visualization_path = output_dir / f"{geojson_filename}_coverage.png"
-            create_visualization(boundary_geojson, datasets, str(visualization_path))
+            
+            # Track which datasets will actually be downloaded
+            downloaded_dataset_names = []
+            
+            # For most-recent flag, only the most recent dataset is used
+            if args.most_recent and datasets:
+                downloaded_dataset_names.append(datasets[0]['name'])
+            else:
+                # All datasets will be downloaded
+                for dataset in datasets:
+                    downloaded_dataset_names.append(dataset['name'])
+            
+            # Create visualization showing only datasets that will be downloaded
+            create_coverage_map(boundary_geojson, datasets, str(visualization_path), 
+                               downloaded_datasets=downloaded_dataset_names)
+            
+            # Verify and log coverage statistics
+            coverage_stats = verify_dataset_coverage(boundary_geojson, datasets, downloaded_dataset_names)
+            
+            if coverage_stats["status"] == "success":
+                logger.info(f"Coverage analysis: {coverage_stats['total_coverage_percent']:.2f}% of boundary covered")
+                for ds_coverage in coverage_stats["dataset_coverages"]:
+                    logger.info(f"  - {ds_coverage['name']}: {ds_coverage['coverage_percent']:.2f}% coverage")
         
         # If dry-run is enabled, just print datasets and exit
         if args.dry_run:
@@ -337,36 +214,32 @@ def main():
                 dataset_name = dataset['name']
                 dataset_year = dataset.get('year', 'Unknown year')
         
+                # Create a modified boundary for this dataset that excludes areas already covered by newer datasets
+                current_boundary = boundary_geojson.copy()
+                
                 if i == 0:
                     log_msg = f"Using most recent dataset as primary: {dataset_name} ({dataset_year})"
                     logger.info(log_msg)
                     info_content.append(f"  - {log_msg}")
                 else:
-                    # Check if we already have full coverage from newer datasets
-                    if len(downloaded_files) > 0:
-                        # Check coverage by comparing point counts
-                        prev_dataset_points = sum([get_point_count(f) for f in downloaded_files])
-                        if prev_dataset_points > 0:
-                            # Estimate if we have good coverage based on point count
-                            # We'll use a simple heuristic: if we have over 1 million points, it's likely good coverage
-                            if prev_dataset_points > 1000000:
-                                log_msg = f"Skipping older dataset {dataset_name} - newer dataset provides sufficient coverage"
-                                logger.info(log_msg)
-                                info_content.append(f"  - {log_msg}")
-                                break
-        
                     log_msg = f"Looking for gaps to fill with older dataset: {dataset_name} ({dataset_year})"
                     logger.info(log_msg)
                     info_content.append(f"  - {log_msg}")
+                    
+                    # Skip all datasets except the most recent one when using --most-recent flag
+                    log_msg = f"Skipping older dataset {dataset_name} - only using most recent dataset"
+                    logger.info(log_msg)
+                    info_content.append(f"  - {log_msg}")
+                    continue
         
                 # Create temporary directory for this dataset's files
                 dataset_dir = temp_dir / dataset_name
                 dataset_dir.mkdir(parents=True, exist_ok=True)
         
-                # Download data for this dataset
+                # Download data for this dataset (using modified boundary for older datasets)
                 logger.info(f"Downloading data from {dataset_name}")
                 files = download_lidar_data(
-                    boundary_geojson=remaining_boundary,
+                    boundary_geojson=current_boundary,
                     dataset=dataset,
                     output_dir=str(dataset_dir),
                     config=config,
@@ -412,41 +285,62 @@ def main():
             for dataset_name, count in coverage_info.items():
                 info_content.append(f"  - {dataset_name}: {count} files")
         else:
-            # Download from all datasets
+            # Download from all datasets separately - no merging
             for dataset in datasets:
-                # Create temporary directory for this dataset's files
-                dataset_dir = temp_dir / dataset['name'] if len(datasets) > 1 else output_dir
+                # Create output directory for this dataset (inside the main output dir)
+                dataset_dir = output_dir
                 dataset_dir.mkdir(parents=True, exist_ok=True)
-        
+                
+                # Create a unique filename for this dataset
+                unique_filename = f"{geojson_filename}_{dataset['name']}"
+                
                 logger.info(f"Downloading data from {dataset['name']}")
                 files = download_lidar_data(
                     boundary_geojson=boundary_geojson,
                     dataset=dataset,
                     output_dir=str(dataset_dir),
                     config=config,
-                    geojson_filename=geojson_filename
+                    geojson_filename=unique_filename
                 )
-        
+                
                 if files:
-                    downloaded_files.extend(files)
-        
-                    # Store year information for each file
+                    # Add year information to each file
                     for file in files:
-                        file_source_map[file] = {
-                            'dataset': dataset['name'],
-                            'year': dataset.get('year', 0)
-                        }
-        
+                        year = dataset.get('year', 0)
+                        
+                        try:
+                            # Add year dimension to the file
+                            from .download import add_year_to_laz
+                            success = add_year_to_laz(file, file, year)
+                            
+                            if success:
+                                logger.info(f"Added year {year} to {file}")
+                            else:
+                                logger.warning(f"Failed to add year dimension to {file}, but file was still downloaded")
+                        except Exception as e:
+                            logger.warning(f"Error adding year to {file}: {str(e)}")
+                    
+                    # Keep track of all downloaded files
+                    downloaded_files.extend(files)
+                    
+                    # Log success
                     log_msg = f"Successfully downloaded {len(files)} files from {dataset['name']}"
                     logger.info(log_msg)
                     info_content.append(f"  - {log_msg}")
+                    info_content.append(f"    Output file: {unique_filename}.laz")
                 else:
                     log_msg = f"No data downloaded from {dataset['name']}"
                     logger.warning(log_msg)
                     info_content.append(f"  - {log_msg}")
+            
+            # Add summary about individual files
+            if downloaded_files:
+                info_content.append(f"")
+                info_content.append(f"Each dataset was downloaded to a separate file.")
+                info_content.append(f"No merging was performed because --most-recent flag was not used.")
         
-        # Process downloaded files (merge multiple or copy single)
-        if downloaded_files:
+        # When using --most-recent, we need to merge the files
+        if args.most_recent and downloaded_files:
             info_content.append(f"")
             
             # Define the final output file
@@ -461,41 +355,65 @@ def main():
                 info_content.append(f"Processing File:")
                 logger.info("Processing downloaded LAZ file")
         
-            # Create a mapping using SourceID instead of Year (Year may not be supported in some PDAL versions)
-            # SourceID is a standard LAS dimension that can store metadata
-            source_id_mapping = {}
+            # Create a year mapping for each file
+            year_mapping = {}
             for file, info in file_source_map.items():
-                # Convert year to an integer ID (1 for oldest, incrementing by 1)
-                # We'll document the mapping in the info file
-                source_id_mapping[file] = info['year']
+                # Use the actual year value from the dataset information
+                year_mapping[file] = info['year']
                 
             # Add the mapping information to the info file
+            import os  # Ensure os is imported here for os.path.basename
             info_content.append(f"")
-            info_content.append(f"Source ID to Year Mapping:")
+            info_content.append(f"Year Mapping for Points:")
             for file, info in file_source_map.items():
                 short_path = os.path.basename(file)
                 info_content.append(f"  - {short_path}: Dataset={info['dataset']}, Year={info['year']}")
         
             # Process based on file count
             if len(downloaded_files) == 1:
-                # Single file case - just move to final location
+                # Single file case - add year dimension and save to final location
                 source_file = downloaded_files[0]
-                log_msg = f"Only one dataset used, copying file to final location"
+                log_msg = f"Only one dataset used, adding year dimension and saving to final location"
                 logger.info(log_msg)
                 info_content.append(f"  - {log_msg}")
                 
+                # Get year value from file source mapping
+                year = 0
+                if source_file in file_source_map:
+                    year = file_source_map[source_file]['year']
+                    
                 try:
-                    # Copy the file to maintain the original
-                    import shutil
-                    shutil.copy2(source_file, merged_file)
-                    success = True
-                    logger.info(f"Copied {source_file} to {merged_file}")
+                    # If source and destination are the same, use a temporary file
+                    if source_file == merged_file:
+                        temp_file = f"{merged_file}.temp"
+                        
+                        # First add year dimension to temp file
+                        from .download import add_year_to_laz
+                        success = add_year_to_laz(source_file, temp_file, year)
+                        
+                        if success:
+                            # Then replace original with temp file
+                            import os
+                            if os.path.exists(merged_file):
+                                os.remove(merged_file)
+                            os.rename(temp_file, merged_file)
+                            logger.info(f"Added year {year} to {merged_file}")
+                        else:
+                            logger.error(f"Failed to add year dimension to {source_file}")
+                    else:
+                        # Add year dimension directly to the merged file location
+                        from .download import add_year_to_laz
+                        success = add_year_to_laz(source_file, merged_file, year)
+                        logger.info(f"Added year {year} to {merged_file}")
                 except Exception as e:
-                    logger.error(f"Error copying file: {str(e)}")
+                    logger.error(f"Error processing file: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
                     success = False
             else:
-                # Multiple files case - merge them
-                success = merge_laz_files(downloaded_files, merged_file, None)  # Skip adding year for now
+                # Multiple files case - merge them with year attribute
+                logger.info(f"Merging files with year attribute for identifying source datasets")
+                success = merge_laz_files(downloaded_files, merged_file, year_mapping)
         
             if success:
                 point_count = get_point_count(merged_file)
@@ -533,20 +451,6 @@ def main():
                 with open(info_file, 'w') as f:
                     f.write('\n'.join(info_content))
                 return 1
-        elif len(downloaded_files) == 1 and len(datasets) == 1:
-            # If there's only one file and it's in the wrong location, move it
-            source_file = downloaded_files[0]
-            target_file = str(output_dir / f"{geojson_filename}.laz")
-        
-            if source_file != target_file:
-                try:
-                    # Rename file to match geojson filename
-                    import shutil
-                    shutil.move(source_file, target_file)
-                    logger.info(f"Renamed {source_file} to {target_file}")
-                except Exception as e:
-                    logger.error(f"Error renaming file: {str(e)}")
-                    return 1
         
         # Write info file
         with open(info_file, 'w') as f:
