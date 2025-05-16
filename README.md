@@ -143,17 +143,6 @@ The tool creates an organized directory structure:
 - Detailed info.txt file with dataset information
 - LAZ files are named after the input GeoJSON
 
-
-The map above shows the geographic boundaries of all available USGS LiDAR datasets. This data is pulled directly from the [USGS LiDAR boundaries source](https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resources.geojson) - the same source used by the CLI tool when finding datasets.
-
-**Click on the map image** to access an interactive version where you can:
-- Zoom in to specific regions
-- Click on dataset boundaries to see details (name, URL, and year)
-- Pan across the map to explore all available data
-- See the color-coded legend showing dataset collection decades
-
-The interactive map is always in sync with the latest dataset information as it fetches directly from the source URL.
-
 ## Known Issues and Bugs
 
 ### Date Parsing Issues
