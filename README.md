@@ -151,4 +151,4 @@ The tool creates an organized directory structure:
 
 ## License
 
-BSD 3-Clause. See [LICENSE](LICENSE) file for details.
+GPL 3-Clause. See [LICENSE](LICENSE) file for details.
