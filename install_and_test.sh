@@ -13,6 +13,9 @@ echo "========== Installing the package locally =========="
 pip install --upgrade pip
 pip install -e .
 
+echo "========== Installing laspy with lazrs backend =========="
+pip install laspy lazrs
+
 echo "========== Checking installation =========="
 which USGS-LiDAR-CLI-Tool || echo "Command not found. Installation may have failed."
 
@@ -56,4 +59,3 @@ fi
 
 echo "========== Installation and test complete =========="
 echo "You can now run: USGS-LiDAR-CLI-Tool --geojson <your_file.geojson> --output-dir <output_dir>"
-
