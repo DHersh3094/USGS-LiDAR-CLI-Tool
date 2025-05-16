@@ -1,0 +1,6 @@
+{
+  "resolution": null,
+  "download_workers": 8,
+  "min_points": 100,
+  "region": "us-west-2"
+}

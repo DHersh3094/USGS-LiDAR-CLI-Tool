@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "USGS-LiDAR-CLI-Tool"
+version = "0.1.0"
+authors = [
+    {name = "Author", email = "dhersh3094@gmail.com"},
+]
+description = "A command-line tool for downloading USGS LiDAR data based on GeoJSON boundaries"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "geopandas",
+    "shapely",
+    "requests",
+    "contextily",
+    "matplotlib",
+]
+
+[project.scripts]
+USGS-LiDAR-CLI-Tool = "USGS_LiDAR_CLI_Tool.cli:main"
+USGS_LiDAR_CLI_Tool = "USGS_LiDAR_CLI_Tool.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/DHersh3094/USGS-LiDAR-CLI-Tool"
+"Bug Tracker" = "https://github.com/DHersh3094/USGS-LiDAR-CLI-Tool/issues"

@@ -1,0 +1,3 @@
+include USGS_LiDAR_CLI_Tool/config.json
+include README.md
+include LICENSE
