@@ -19,6 +19,9 @@ setup(
         "requests",
         "contextily",
         "matplotlib",
+        "laspy",
+        "numpy",
+        "lazrs",
     ],
     python_requires='>=3.7',
     entry_points={
@@ -29,7 +32,7 @@ setup(
     },
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: GPL 3 License",
         "Operating System :: OS Independent",
     ],
 )
