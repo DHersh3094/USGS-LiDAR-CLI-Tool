@@ -15,9 +15,154 @@ import tempfile
 import subprocess
 import concurrent.futures
 from pathlib import Path
+import io
+import numpy as np
 from typing import List, Dict, Any, Optional, Union, Tuple
 
+# Set up logger
 logger = logging.getLogger(__name__)
+
+# Debug Python environment
+logger.info(f"Python executable: {sys.executable}")
+logger.info(f"Python version: {sys.version}")
+
+# Try to import laspy - will be used to add Year VLR
+try:
+    import laspy
+    import numpy as np
+    LASPY_AVAILABLE = True
+    logger.info(f"laspy imported successfully from: {laspy.__file__}")
+except ImportError as e:
+    LASPY_AVAILABLE = False
+    logger.warning(f"laspy import failed: {e}")
+    logger.warning("laspy not installed, Year dimension will not be added to LiDAR data")
+
+
+def add_year_to_laz(input_file: str, output_file: str, year: int) -> bool:
+    """
+    Add Year information to a LAZ file using laspy.
+    
+    Args:
+        input_file: Path to the input LAZ file
+        output_file: Path to the output LAZ file with Year information
+        year: Year value to add (as integer)
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    import os  # Ensure os is imported at the beginning of the function
+    
+    if not LASPY_AVAILABLE:
+        logger.warning("laspy not available, Year dimension cannot be added")
+        return False
+    
+    # Handle case where input and output are the same file
+    if input_file == output_file:
+        temp_output = f"{output_file}.temp.laz"
+        logger.info(f"Input and output files are the same, using temporary file: {temp_output}")
+        result = add_year_to_laz(input_file, temp_output, year)
+        if result:
+            try:
+                if os.path.exists(output_file):
+                    os.remove(output_file)
+                os.rename(temp_output, output_file)
+                return True
+            except Exception as e:
+                logger.error(f"Error renaming temporary file: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return False
+        return False
+        
+    try:
+        # Check if input file exists and is readable
+        if not os.path.exists(input_file):
+            logger.error(f"Input file does not exist: {input_file}")
+            return False
+            
+        # Open the LAZ file
+        with laspy.open(input_file) as in_file:
+            las = in_file.read()
+            
+            # Create a new LasData object with the same header and point data
+            # Create a copy of the header
+            new_header = laspy.LasHeader(
+                version=las.header.version,
+                point_format=las.header.point_format
+            )
+            
+            # Copy header attributes from the original
+            for attr_name in dir(las.header):
+                if not attr_name.startswith('_') and attr_name not in ['version', 'point_format']:
+                    try:
+                        attr_value = getattr(las.header, attr_name)
+                        if not callable(attr_value):
+                            setattr(new_header, attr_name, attr_value)
+                    except:
+                        pass
+            
+            # Create a new LasData with the copied header
+            output_las = laspy.LasData(new_header)
+            
+            # Copy all points from the original
+            for dim_name in las.point_format.dimension_names:
+                try:
+                    output_las[dim_name] = las[dim_name]
+                except Exception as e:
+                    logger.warning(f"Could not copy dimension {dim_name}: {str(e)}")
+            
+            # Add Year dimension if it doesn't exist
+            if 'Year' not in output_las.point_format.dimension_names:
+                try:
+                    # Add Year as extra dimension
+                    output_las.add_extra_dim(laspy.ExtraBytesParams(
+                        name="Year",
+                        type=np.uint16,  # Use unsigned 16-bit int for years
+                        description=f"Acquisition year: {year}"
+                    ))
+                    # Fill the Year dimension with the year value
+                    output_las.Year[:] = year
+                    logger.info(f"Added Year dimension to output file")
+                except Exception as e:
+                    logger.warning(f"Could not add Year dimension: {str(e)}")
+            
+            # Add a custom VLR with year information
+            vlr_data = f"Year: {year}".encode('utf-8')
+            
+            # Create a custom VLR
+            vlr = laspy.vlrs.VLR(
+                user_id="USGS_LiDAR_CLI",
+                record_id=1,  # Custom record ID for Year
+                description=f"Acquisition Year: {year}",
+                record_data=vlr_data
+            )
+            
+            # Copy existing VLRs and add the new one
+            for existing_vlr in las.vlrs:
+                output_las.vlrs.append(existing_vlr)
+            output_las.vlrs.append(vlr)
+            
+            # Ensure the output directory exists
+            output_dir = os.path.dirname(output_file)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Write the modified file
+            output_las.write(output_file)
+            
+            # Verify the file was created
+            if not os.path.exists(output_file):
+                logger.error(f"Failed to create output file: {output_file}")
+                return False
+                
+            logger.info(f"Added Year {year} as VLR to file")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error adding Year to LAZ file: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
 
 
 def get_ept_bounds(ept_url: str) -> Optional[List[float]]:
@@ -100,7 +245,8 @@ def get_ept_bounds(ept_url: str) -> Optional[List[float]]:
 def create_pdal_pipeline(input_url: str, output_laz: str, 
                         boundary_geojson: Optional[Dict[str, Any]] = None,
                         bounds: Optional[List[float]] = None, 
-                        resolution: Optional[Union[float, str]] = None) -> Dict[str, Any]:
+                        resolution: Optional[Union[float, str]] = None,
+                        classify_ground: bool = False) -> Dict[str, Any]:
     """
     Create a PDAL pipeline definition for processing EPT data.
     
@@ -109,7 +255,10 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
         output_laz: Path to the output LAZ file
         boundary_geojson: Optional GeoJSON boundary to limit processing
         bounds: Optional bounds to limit processing [minx, miny, maxx, maxy]
-        resolution: Optional resolution parameter
+        resolution: Optional resolution parameter for EPT data. Use 'full' for native resolution (all points), 
+               or a numeric value in coordinate units (meters) to control point spacing. Lower values 
+               create denser point clouds with more detail but larger files.
+        classify_ground: Whether to apply SMRF ground classification
         
     Returns:
         dict: PDAL pipeline definition
@@ -140,17 +289,40 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
         bounds_str = f"([{bounds[0]}, {bounds[2]}], [{bounds[1]}, {bounds[3]}])"
         reader["bounds"] = bounds_str
     
+    # Build the pipeline stages
+    pipeline_stages = [reader]
+    
+    # Add SMRF ground classification if requested
+    if classify_ground:
+        smrf_filter = {
+            "type": "filters.smrf",
+            "window": 18.0,
+            "slope": 0.15,
+            "threshold": 0.5,
+            "ignore": "Classification[7:7]",
+            "returns": "last, only"
+        }
+        pipeline_stages.append(smrf_filter)
+        
+        # Add a range filter to properly assign classification values
+        range_filter = {
+            "type": "filters.range",
+            "limits": "Classification[2:2]"
+        }
+        pipeline_stages.append(range_filter)
+    
+    # Add writer as the final stage
+    writer = {
+        "type": "writers.las",
+        "filename": output_laz,
+        "minor_version": 4,
+        "dataformat_id": 8
+    }
+    pipeline_stages.append(writer)
+    
     # Create the pipeline
     pipeline = {
-        "pipeline": [
-            reader,
-            {
-                "type": "writers.las",
-                "filename": output_laz,
-                "minor_version": 4,
-                "dataformat_id": 8
-            }
-        ]
+        "pipeline": pipeline_stages
     }
     
     # Apply resolution if specified
@@ -244,6 +416,40 @@ def get_point_count(laz_file: str) -> int:
         return 0
 
 
+def get_bounds(laz_file: str) -> Optional[List[float]]:
+    """
+    Get the bounds of a LAZ file using PDAL info.
+    
+    Args:
+        laz_file: Path to the LAZ file
+        
+    Returns:
+        list: [minx, miny, maxx, maxy] if successful, None otherwise
+    """
+    try:
+        if not os.path.exists(laz_file):
+            return None
+            
+        cmd = ["pdal", "info", "--summary", laz_file]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode == 0:
+            # Parse the JSON output to get bounds
+            summary = json.loads(result.stdout)
+            if 'summary' in summary and 'bounds' in summary['summary']:
+                bounds = summary['summary']['bounds']
+                if all(k in bounds for k in ['minx', 'miny', 'maxx', 'maxy']):
+                    return [
+                        bounds['minx'], bounds['miny'],
+                        bounds['maxx'], bounds['maxy']
+                    ]
+        
+        return None
+    except Exception as e:
+        logger.warning(f"Error getting bounds from {laz_file}: {str(e)}")
+        return None
+
+
 def create_processing_tiles(bounds: List[float], tile_size: float = 1000) -> List[List[float]]:
     """
     Create processing tiles from bounds.
@@ -325,12 +531,16 @@ def download_dataset(boundary_geojson: Dict[str, Any], dataset: Dict[str, Any],
         # Create a single output file for the dataset
         output_file = os.path.join(output_dir, f"{output_filename}.laz")
         
+        # Check if ground classification is enabled
+        classify_ground = config.get('classify_ground', False)
+        
         # Create pipeline using the boundary directly
         pipeline = create_pdal_pipeline(
             input_url=ept_url,
             output_laz=output_file,
             boundary_geojson=boundary_geojson,
-            resolution=resolution
+            resolution=resolution,
+            classify_ground=classify_ground
         )
         
         # Run the pipeline
@@ -384,7 +594,7 @@ def merge_laz_files(input_files: List[str], output_file: str, year_mapping: Dict
     Args:
         input_files: List of input LAZ file paths
         output_file: Path to the output merged LAZ file
-        year_mapping: Optional dictionary mapping filenames to years for adding a Year dimension
+        year_mapping: Optional dictionary mapping filenames to years
         
     Returns:
         bool: True if successful, False otherwise
@@ -396,77 +606,61 @@ def merge_laz_files(input_files: List[str], output_file: str, year_mapping: Dict
         
         logger.info(f"Merging {len(input_files)} LAZ files into {output_file}")
         
-        # Create a PDAL pipeline for merging
-        pipeline = {
+        # Step 1: Simple merge of the files
+        merge_pipeline = {
             "pipeline": []
         }
         
-        # Add readers for each file, with extra attribute if year_mapping is provided
+        # Add readers for each file with simple tags
         for i, file_path in enumerate(input_files):
+            # If there's year mapping, add it to the tag for informational purposes
+            tag_suffix = ""
+            if year_mapping and file_path in year_mapping:
+                year_value = int(year_mapping[file_path])
+                tag_suffix = f"_year{year_value}"
+                
             reader = {
                 "type": "readers.las",
                 "filename": file_path,
-                "tag": f"reader{i}"
+                "tag": f"reader{i}{tag_suffix}"
             }
-            
-            pipeline["pipeline"].append(reader)
-            
-            # If year mapping is provided, add an assignment filter to create a Year dimension
-            if year_mapping and file_path in year_mapping:
-                year_value = year_mapping[file_path]
-                pipeline["pipeline"].append({
-                    "type": "filters.assign",
-                    "assignment": f"Year[1:1]={year_value}",
-                    "tag": f"assign{i}",
-                    "inputs": [f"reader{i}"]
-                })
+            merge_pipeline["pipeline"].append(reader)
         
         # Create inputs list for the merge filter
-        if year_mapping:
-            inputs = [f"assign{i}" for i in range(len(input_files))]
-        else:
-            inputs = [f"reader{i}" for i in range(len(input_files))]
-            
-        # Add merge filter if there are multiple files
+        inputs = []
+        for i in range(len(input_files)):
+            reader = merge_pipeline["pipeline"][i]
+            inputs.append(reader["tag"])
+        
+        # Create a temporary merged file
+        temp_merged_file = output_file + ".temp.laz"
+        
+        # Add merge filter for multiple files
         if len(input_files) > 1:
-            pipeline["pipeline"].append(
-                {
-                    "type": "filters.merge",
-                    "inputs": inputs,
-                    "tag": "merged"
-                }
-            )
+            merge_pipeline["pipeline"].append({
+                "type": "filters.merge",
+                "inputs": inputs,
+                "tag": "merged"
+            })
             
             # Add writer with merged input
-            writer = {
+            merge_pipeline["pipeline"].append({
                 "type": "writers.las",
-                "filename": output_file,
+                "filename": temp_merged_file,
                 "inputs": ["merged"]
-            }
-            
-            # Only add extra_dims parameter if year_mapping is provided
-            if year_mapping:
-                writer["extra_dims"] = "all"
-                
-            pipeline["pipeline"].append(writer)
+            })
         else:
             # Add writer directly for a single file
-            writer = {
+            merge_pipeline["pipeline"].append({
                 "type": "writers.las",
-                "filename": output_file,
+                "filename": temp_merged_file,
                 "inputs": [inputs[0]]
-            }
-            
-            # Only add extra_dims parameter if year_mapping is provided
-            if year_mapping:
-                writer["extra_dims"] = "all"
-                
-            pipeline["pipeline"].append(writer)
+            })
         
         # Create a temporary pipeline JSON file
         pipeline_file = "temp_merge_pipeline.json"
         with open(pipeline_file, "w") as f:
-            json.dump(pipeline, f, indent=4)
+            json.dump(merge_pipeline, f, indent=4)
         
         # Run the pipeline
         cmd = ["pdal", "pipeline", pipeline_file]
@@ -478,18 +672,147 @@ def merge_laz_files(input_files: List[str], output_file: str, year_mapping: Dict
         except:
             pass
         
-        if result.returncode == 0:
+        stage1_success = False
+        if result.returncode == 0 and os.path.exists(temp_merged_file):
+            stage1_success = True
+            
+            if len(input_files) > 1 and year_mapping:
+                # Log information about dataset sources
+                source_info = []
+                for file_path, year in year_mapping.items():
+                    source_info.append(f"{os.path.basename(file_path)} (Year: {int(year)})")
+                logger.info(f"Merged files from years: {', '.join(source_info)}")
+                
+                # Add Year VLR to each file using laspy before merging
+                try:
+                    # Process each file to add Year VLR
+                    if LASPY_AVAILABLE:
+                        logger.info("Adding Year information to LAZ files using laspy before merging")
+                        
+                        # Add Year information to each file and create new files with the year
+                        processed_files = []
+                        
+                        for i, (file_path, year) in enumerate(year_mapping.items()):
+                            # Create a temporary file with Year information
+                            temp_year_file = f"{output_file}.year_{i}.laz"
+                            
+                            try:
+                                # Add Year information using laspy
+                                success = add_year_to_laz(file_path, temp_year_file, int(year))
+                                if success:
+                                    processed_files.append(temp_year_file)
+                                else:
+                                    # If failed, just use the original file
+                                    logger.warning(f"Failed to add Year information to {file_path}")
+                                    processed_files.append(file_path)
+                            except Exception as e:
+                                logger.warning(f"Error adding Year to {file_path}: {str(e)}")
+                                # Use original file if error
+                                processed_files.append(file_path)
+                        
+                        # Now merge all the processed files
+                        if processed_files:
+                            merge_pipeline = {
+                                "pipeline": []
+                            }
+                            
+                            # Add readers for each processed file
+                            for i, file_path in enumerate(processed_files):
+                                reader = {
+                                    "type": "readers.las",
+                                    "filename": file_path,
+                                    "tag": f"reader{i}"
+                                }
+                                merge_pipeline["pipeline"].append(reader)
+                            
+                            # Create inputs list for the merge filter
+                            inputs = [f"reader{i}" for i in range(len(processed_files))]
+                            
+                            # Add merge filter
+                            if len(processed_files) > 1:
+                                merge_pipeline["pipeline"].append({
+                                    "type": "filters.merge",
+                                    "inputs": inputs,
+                                    "tag": "merged"
+                                })
+                                writer_input = "merged"
+                            else:
+                                writer_input = inputs[0]
+                            
+                            # Add writer
+                            merge_pipeline["pipeline"].append({
+                                "type": "writers.las",
+                                "filename": output_file,
+                                "inputs": [writer_input],
+                                "extra_dims": "all"
+                            })
+                            
+                            # Write final merge pipeline to file
+                            final_pipeline_file = "final_merge_pipeline.json"
+                            with open(final_pipeline_file, "w") as f:
+                                json.dump(merge_pipeline, f, indent=4)
+                            
+                            # Run the final merge pipeline
+                            cmd = ["pdal", "pipeline", final_pipeline_file]
+                            final_result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                            
+                            # Clean up
+                            try:
+                                os.remove(final_pipeline_file)
+                                for file in processed_files:
+                                    # Only remove temp files, not original files
+                                    if file.startswith(f"{output_file}.year_"):
+                                        os.remove(file)
+                            except Exception as e:
+                                logger.warning(f"Error cleaning up temporary files: {str(e)}")
+                            
+                            if final_result.returncode == 0 and os.path.exists(output_file):
+                                # Success - files merged with Year information
+                                logger.info("Successfully merged files with Year information")
+                                # Remove temp merged file
+                                try:
+                                    os.remove(temp_merged_file)
+                                except Exception:
+                                    pass
+                            else:
+                                # Final merge failed, but we still have the original merged file
+                                logger.warning(f"Failed to merge files with Year information: {final_result.stderr}")
+                                # Move the temp file to the final output location
+                                import shutil
+                                shutil.move(temp_merged_file, output_file)
+                        else:
+                            # No processed files, just use the original merge
+                            import shutil
+                            shutil.move(temp_merged_file, output_file)
+                    else:
+                        # laspy not available, just use the original merge
+                        logger.warning("laspy not available, Year dimension will not be added")
+                        import shutil
+                        shutil.move(temp_merged_file, output_file)
+                except Exception as e:
+                    logger.warning(f"Error adding Year dimension: {str(e)}")
+                    # Fall back to just using the merged file without the Year dimension
+                    import shutil
+                    shutil.move(temp_merged_file, output_file)
+            else:
+                # For single file or no year mapping, just move the temp file to the output
+                import shutil
+                shutil.move(temp_merged_file, output_file)
+            
+            # Get info about the final file
             if os.path.exists(output_file):
-                # Get point count of merged file
                 point_count = get_point_count(output_file)
                 file_size = os.path.getsize(output_file) / (1024 * 1024)  # Convert to MB
                 logger.info(f"Successfully merged files: {file_size:.2f} MB, {point_count} points")
                 return True
             else:
-                logger.error("Merge process completed but output file not found")
+                logger.error("Final output file not found")
                 return False
         else:
-            logger.error(f"Error merging files: {result.stderr}")
+            if result.returncode != 0:
+                logger.error(f"Error in merge process: {result.stderr}")
+            else:
+                logger.error("Merge process completed but temporary file not found")
             return False
     
     except Exception as e:
