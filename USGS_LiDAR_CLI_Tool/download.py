@@ -438,24 +438,30 @@ def merge_laz_files(input_files: List[str], output_file: str, year_mapping: Dict
             )
             
             # Add writer with merged input
-            pipeline["pipeline"].append(
-                {
-                    "type": "writers.las",
-                    "filename": output_file,
-                    "inputs": ["merged"],
-                    "extra_dims": "all" if year_mapping else None
-                }
-            )
+            writer = {
+                "type": "writers.las",
+                "filename": output_file,
+                "inputs": ["merged"]
+            }
+            
+            # Only add extra_dims parameter if year_mapping is provided
+            if year_mapping:
+                writer["extra_dims"] = "all"
+                
+            pipeline["pipeline"].append(writer)
         else:
             # Add writer directly for a single file
-            pipeline["pipeline"].append(
-                {
-                    "type": "writers.las",
-                    "filename": output_file,
-                    "inputs": [inputs[0]],
-                    "extra_dims": "all" if year_mapping else None
-                }
-            )
+            writer = {
+                "type": "writers.las",
+                "filename": output_file,
+                "inputs": [inputs[0]]
+            }
+            
+            # Only add extra_dims parameter if year_mapping is provided
+            if year_mapping:
+                writer["extra_dims"] = "all"
+                
+            pipeline["pipeline"].append(writer)
         
         # Create a temporary pipeline JSON file
         pipeline_file = "temp_merge_pipeline.json"
