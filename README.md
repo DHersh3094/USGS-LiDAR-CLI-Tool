@@ -11,6 +11,10 @@ A command-line interface tool for downloading USGS LiDAR data based on GeoJSON b
 - Dry-run mode to check for available data without downloading
 - Efficient handling of data from multiple sources
 
+## Coverage
+- Coverage is based on the USGS public lidar boundaries at: https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resources.geojson
+- Some areas have no coverage. See `usgs_lidar_boundaries.gpkg`
+
 ## Installation
 
 ### Prerequisites
@@ -72,7 +76,8 @@ USGS-LiDAR-CLI-Tool --geojson your_boundary.geojson --output-dir output_director
 - `--geojson`, `-g`: Path to input GeoJSON file defining the boundary (required)
 - `--output-dir`, `-o`: Output directory for downloaded LAZ files (default: lidar_data)
 - `--config`, `-c`: Path to configuration file (default: config.json)
-- `--resolution`, `-r`: Resolution to use for the data. Use 'full' for native resolution, or specify a numeric value
+- `--resolution`, `-r`: Resolution to use for the data in Entwine Point Tile (EPT) format. Use 'full' for native resolution (all points), or specify a numeric value in coordinate units (meters) to control point spacing. For example, '1.0' will retrieve points with ~1m spacing, '0.5' creates denser point clouds, and '2.0' creates sparser data. Lower values = more detail and larger files.
+- `--classify_ground`: Add smrf ground classification (default: true)
 - `--workers`, `-w`: Number of parallel workers (default: from config or 8)
 - `--verbose`, `-v`: Enable verbose logging
 - `--dry-run`, `-d`: Find intersecting datasets but don't download files
@@ -84,12 +89,40 @@ USGS-LiDAR-CLI-Tool --geojson your_boundary.geojson --output-dir output_director
 
 Check available datasets without downloading:
 ```bash
-USGS-LiDAR-CLI-Tool --geojson area.geojson --dry-run
+USGS-LiDAR-CLI-Tool --geojson demo.geojson --dry-run
 ```
 
-Download using only the most recent datasets:
+Creates an image:
+![Demo Coverage](images/demo_coverage.png)
+
+
+Then download all intersecting pointclouds (in this case only 1):
 ```bash
-USGS-LiDAR-CLI-Tool --geojson area.geojson --output-dir output --most-recent
+USGS-LiDAR-CLI-Tool --geojson demo.geojson
+```
+
+Logs are saved to `demo_info.txt`
+```
+USGS LiDAR Downloader Report
+Generated on: 2025-05-16 20:15:09
+Input GeoJSON: demo.geojson
+
+Intersecting Datasets (1):
+  1. FL_Peninsular_FDEM_Nassau_2018 (2018.0)
+
+Download Strategy: All intersecting datasets
+
+Download Log:
+  - Successfully downloaded 1 files from FL_Peninsular_FDEM_Nassau_2018
+    Output file: demo_FL_Peninsular_FDEM_Nassau_2018.laz
+
+Each dataset was downloaded to a separate file.
+No merging was performed because --most-recent flag was not used.
+```
+
+Download using only the most recent datasets (If there are more than 1 intersecting):
+```bash
+USGS-LiDAR-CLI-Tool --geojson area.geojson --most-recent
 ```
 
 Download at a specific resolution:
@@ -109,6 +142,17 @@ The tool creates an organized directory structure:
 - Visualizations show dataset coverage
 - Detailed info.txt file with dataset information
 - LAZ files are named after the input GeoJSON
+
+
+The map above shows the geographic boundaries of all available USGS LiDAR datasets. This data is pulled directly from the [USGS LiDAR boundaries source](https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resources.geojson) - the same source used by the CLI tool when finding datasets.
+
+**Click on the map image** to access an interactive version where you can:
+- Zoom in to specific regions
+- Click on dataset boundaries to see details (name, URL, and year)
+- Pan across the map to explore all available data
+- See the color-coded legend showing dataset collection decades
+
+The interactive map is always in sync with the latest dataset information as it fetches directly from the source URL.
 
 ## Known Issues and Bugs
 
