@@ -75,13 +75,11 @@ USGS-LiDAR-CLI-Tool --geojson your_boundary.geojson --output-dir output_director
 
 - `--geojson`, `-g`: Path to input GeoJSON file defining the boundary (required)
 - `--output-dir`, `-o`: Output directory for downloaded LAZ files (default: lidar_data)
-- `--config`, `-c`: Path to configuration file (default: config.json)
-- `--resolution`, `-r`: Resolution to use for the data in Entwine Point Tile (EPT) format. Use 'full' for native resolution (all points), or specify a numeric value in coordinate units (meters) to control point spacing. For example, '1.0' will retrieve points with ~1m spacing, '0.5' creates denser point clouds, and '2.0' creates sparser data. Lower values = more detail and larger files.
-- `--classify_ground`: Add smrf ground classification (default: true)
-- `--workers`, `-w`: Number of parallel workers (default: from config or 8)
-- `--verbose`, `-v`: Enable verbose logging
 - `--dry-run`, `-d`: Find intersecting datasets but don't download files
-- `--keep-temp`, `-k`: Keep temporary downloaded files from each dataset
+- `--resolution`, `-r`: Resolution to use for the data in Entwine Point Tile (EPT) format. Use 'full' for native resolution (all points), or specify a numeric value in coordinate units (meters) to control point spacing. For example, '1.0' will retrieve points with ~1m spacing, '0.5' creates denser point clouds, and '2.0' creates sparser data. Lower values = more detail and larger files.
+- `--coordinate-reference-system`, `-crs`: EPSG code to reproject laz files during download
+- `--classify_ground`: Add smrf ground classification (default: true)
+- `--verbose`, `-v`: Enable verbose logging
 - `--most-recent`: Use only the most recent data when multiple datasets overlap
 - `--no-visualization`: Skip creating visualization of datasets and boundary
 
@@ -96,9 +94,9 @@ Creates an image:
 ![Demo Coverage](images/demo_coverage.png)
 
 
-Then download all intersecting pointclouds (in this case only 1):
+Then download all intersecting pointclouds (in this case only 1) with a target CRS:
 ```bash
-USGS-LiDAR-CLI-Tool --geojson demo.geojson
+USGS-LiDAR-CLI-Tool --geojson demo.geojson -crs 32617
 ```
 
 Logs are saved to `demo_info.txt`
@@ -120,19 +118,9 @@ Each dataset was downloaded to a separate file.
 No merging was performed because --most-recent flag was not used.
 ```
 
-Download using only the most recent datasets (If there are more than 1 intersecting):
+Download using only the most recent datasets if there are more than 1 intersecting. **Not guaranteed to get the actual most recent due to the date parsing bug. Easier to just skip this flag for now**:
 ```bash
 USGS-LiDAR-CLI-Tool --geojson area.geojson --most-recent
-```
-
-Download at a specific resolution:
-```bash
-USGS-LiDAR-CLI-Tool --geojson area.geojson --resolution 1.0
-```
-
-Enable verbose logging for debugging:
-```bash
-USGS-LiDAR-CLI-Tool --geojson area.geojson --verbose
 ```
 
 ## Output
@@ -150,7 +138,6 @@ The tool creates an organized directory structure:
 - **Dataset Year Parsing**: Some USGS dataset bucket names have non-standard formatting that prevents correct date/year extraction. For example, buckets like "AR_NorthEast_1_D22" will not have their dates parsed correctly, which can impact the `--most-recent` functionality and visualization year labels.
 
 ## To do:
-- Add CRS option during download
 - Add bulk download support using an input GeoPackage
 
 ## License

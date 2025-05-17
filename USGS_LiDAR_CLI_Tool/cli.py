@@ -92,6 +92,11 @@ def main():
         "--classify-ground", action="store_true",
         help="Apply SMRF ground classification to point clouds during download"
     )
+    parser.add_argument(
+        "--coordinate-reference-system", "-crs", type=str,
+        help="EPSG code for output coordinate reference system (e.g., '32615'). "
+             "The downloaded LAZ files will be reprojected to this CRS."
+    )
     # Removed the --coverage-method option as requested
     
     args = parser.parse_args()
@@ -122,6 +127,8 @@ def main():
             config["download_workers"] = args.workers
         if args.classify_ground:
             config["classify_ground"] = True
+        if args.coordinate_reference_system:
+            config["coordinate_reference_system"] = args.coordinate_reference_system
         # Coverage method removed - simplified approach used
         
         # Load the input GeoJSON

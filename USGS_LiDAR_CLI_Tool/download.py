@@ -246,7 +246,8 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
                         boundary_geojson: Optional[Dict[str, Any]] = None,
                         bounds: Optional[List[float]] = None, 
                         resolution: Optional[Union[float, str]] = None,
-                        classify_ground: bool = False) -> Dict[str, Any]:
+                        classify_ground: bool = False,
+                        coordinate_reference_system: Optional[str] = None) -> Dict[str, Any]:
     """
     Create a PDAL pipeline definition for processing EPT data.
     
@@ -291,6 +292,25 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
     
     # Build the pipeline stages
     pipeline_stages = [reader]
+    
+    # Add reprojection filter if coordinate reference system is specified
+    if coordinate_reference_system:
+        # Check if it's a valid EPSG code format (just simple validation)
+        if coordinate_reference_system.isdigit() or (coordinate_reference_system.startswith("EPSG:") and coordinate_reference_system[5:].isdigit()):
+            # Format the out_srs parameter
+            out_srs = coordinate_reference_system
+            if not out_srs.startswith("EPSG:"):
+                out_srs = f"EPSG:{out_srs}"
+                
+            # Add the reprojection filter
+            reprojection_filter = {
+                "type": "filters.reprojection",
+                "out_srs": out_srs
+            }
+            pipeline_stages.append(reprojection_filter)
+            logger.info(f"Added reprojection filter to {out_srs}")
+        else:
+            logger.warning(f"Invalid coordinate reference system format: {coordinate_reference_system}. Should be an EPSG code (e.g., '32615' or 'EPSG:32615').")
     
     # Add SMRF ground classification if requested
     if classify_ground:
@@ -534,13 +554,19 @@ def download_dataset(boundary_geojson: Dict[str, Any], dataset: Dict[str, Any],
         # Check if ground classification is enabled
         classify_ground = config.get('classify_ground', False)
         
+        # Get coordinate reference system from config if specified
+        coordinate_reference_system = config.get('coordinate_reference_system')
+        if coordinate_reference_system:
+            logger.info(f"Using coordinate reference system: {coordinate_reference_system}")
+            
         # Create pipeline using the boundary directly
         pipeline = create_pdal_pipeline(
             input_url=ept_url,
             output_laz=output_file,
             boundary_geojson=boundary_geojson,
             resolution=resolution,
-            classify_ground=classify_ground
+            classify_ground=classify_ground,
+            coordinate_reference_system=coordinate_reference_system
         )
         
         # Run the pipeline
