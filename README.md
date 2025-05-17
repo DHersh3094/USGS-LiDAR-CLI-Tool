@@ -149,6 +149,10 @@ The tool creates an organized directory structure:
 
 - **Dataset Year Parsing**: Some USGS dataset bucket names have non-standard formatting that prevents correct date/year extraction. For example, buckets like "AR_NorthEast_1_D22" will not have their dates parsed correctly, which can impact the `--most-recent` functionality and visualization year labels.
 
+## To do:
+- Add CRS option during download
+- Add bulk download support using an input GeoPackage
+
 ## License
 
 GPL 3-Clause. See [LICENSE](LICENSE) file for details.
