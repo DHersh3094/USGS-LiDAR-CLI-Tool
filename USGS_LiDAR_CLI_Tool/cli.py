@@ -80,9 +80,8 @@ def main():
     )
     parser.add_argument(
         "--most-recent", action="store_true",
-        help="Use the most recent dataset as primary source, then fill gaps with older datasets. "
-             "Gaps are determined by the actual geometry coverage of the most recent dataset. "
-             "Areas not covered by newer datasets will be filled with data from older datasets."
+        help="Download only from the most recent dataset that intersects with the boundary. "
+             "Older datasets are completely ignored regardless of coverage percentage."
     )
     parser.add_argument(
         "--no-visualization", action="store_true",
@@ -176,6 +175,13 @@ def main():
                 logger.info(f"Coverage analysis: {coverage_stats['total_coverage_percent']:.2f}% of boundary covered")
                 for ds_coverage in coverage_stats["dataset_coverages"]:
                     logger.info(f"  - {ds_coverage['name']}: {ds_coverage['coverage_percent']:.2f}% coverage")
+                    
+                # Add warning about coverage when using most-recent flag
+                if args.most_recent and datasets:
+                    logger.warning("NOTE: The visualization shows the geometric boundary of the dataset, but the")
+                    logger.warning("      actual download may provide only partial coverage within that boundary.")
+                    logger.warning("      This occurs because some areas within the dataset boundary may not have")
+                    logger.warning("      point cloud data available in the EPT source.")
         
         # If dry-run is enabled, just print datasets and exit
         if args.dry_run:
@@ -209,88 +215,64 @@ def main():
         # Keep track of which file came from which dataset and its year
         file_source_map = {}
         
-        # If most-recent flag is set, try to use most recent dataset first, then fill gaps with older datasets
+        # If most-recent flag is set, download only the most recent dataset
         if args.most_recent and datasets:
-            # Dictionary to track coverage from each dataset
-            coverage_info = {}
-        
-            # Process datasets in order of recency (most recent first)
-            remaining_boundary = boundary_geojson.copy()
-        
-            for i, dataset in enumerate(datasets):
-                dataset_name = dataset['name']
-                dataset_year = dataset.get('year', 'Unknown year')
-        
-                # Create a modified boundary for this dataset that excludes areas already covered by newer datasets
-                current_boundary = boundary_geojson.copy()
+            # Get only the most recent dataset (datasets are already sorted by year, most recent first)
+            dataset = datasets[0]
+            dataset_name = dataset['name']
+            dataset_year = dataset.get('year', 'Unknown year')
+            
+            # Log what we're doing
+            log_msg = f"Using only the most recent dataset: {dataset_name} ({dataset_year})"
+            logger.info(log_msg)
+            info_content.append(f"  - {log_msg}")
+            
+            # Create output directory for this dataset
+            dataset_dir = output_dir
+            
+            # Download data for this dataset
+            logger.info(f"Downloading data from {dataset_name}")
+            files = download_lidar_data(
+                boundary_geojson=boundary_geojson,
+                dataset=dataset,
+                output_dir=str(dataset_dir),
+                config=config,
+                geojson_filename=geojson_filename
+            )
+            
+            if files:
+                downloaded_files.extend(files)
                 
-                if i == 0:
-                    log_msg = f"Using most recent dataset as primary: {dataset_name} ({dataset_year})"
-                    logger.info(log_msg)
-                    info_content.append(f"  - {log_msg}")
-                else:
-                    log_msg = f"Looking for gaps to fill with older dataset: {dataset_name} ({dataset_year})"
-                    logger.info(log_msg)
-                    info_content.append(f"  - {log_msg}")
+                # Add year information to each file
+                for file in files:
+                    year = dataset.get('year', 0)
                     
-                    # Skip all datasets except the most recent one when using --most-recent flag
-                    log_msg = f"Skipping older dataset {dataset_name} - only using most recent dataset"
-                    logger.info(log_msg)
-                    info_content.append(f"  - {log_msg}")
-                    continue
-        
-                # Create temporary directory for this dataset's files
-                dataset_dir = temp_dir / dataset_name
-                dataset_dir.mkdir(parents=True, exist_ok=True)
-        
-                # Download data for this dataset (using modified boundary for older datasets)
-                logger.info(f"Downloading data from {dataset_name}")
-                files = download_lidar_data(
-                    boundary_geojson=current_boundary,
-                    dataset=dataset,
-                    output_dir=str(dataset_dir),
-                    config=config,
-                    geojson_filename=f"{geojson_filename}_{dataset_name}"
-                )
-        
-                if files:
-                    downloaded_files.extend(files)
-                    coverage_info[dataset_name] = len(files)
-        
-                    # Store year information for each file
-                    for file in files:
-                        file_source_map[file] = {
-                            'dataset': dataset_name,
-                            'year': dataset.get('year', 0)
-                        }
-        
-                    # If this isn't the first dataset, it's being used to fill gaps
-                    if i > 0:
-                        log_msg = f"Filled gaps with {len(files)} files from {dataset_name}"
-                    else:
-                        log_msg = f"Successfully downloaded {len(files)} files from {dataset_name}"
-        
-                    logger.info(log_msg)
-                    info_content.append(f"  - {log_msg}")
-        
-                    # Update remaining boundary (for future gap filling)
-                    # This is a simplification - in a real implementation, you'd compute the actual
-                    # coverage area from the downloaded files and subtract it from the boundary
-                    # For now, we'll simply assume each dataset might have gaps
-                else:
-                    log_msg = f"No data downloaded from {dataset_name}"
-                    logger.warning(log_msg)
-                    info_content.append(f"  - {log_msg}")
-        
-                # Stop if we've filled all gaps or this is the last dataset
-                if i == len(datasets) - 1:
-                    break
-        
-            # Add summary of data sources
+                    try:
+                        # Add year dimension to the file
+                        from .download import add_year_to_laz
+                        success = add_year_to_laz(file, file, year)
+                        
+                        if success:
+                            logger.info(f"Added year {year} to {file}")
+                        else:
+                            logger.warning(f"Failed to add year dimension to {file}, but file was still downloaded")
+                    except Exception as e:
+                        logger.warning(f"Error adding year to {file}: {str(e)}")
+                
+                # Log success
+                log_msg = f"Successfully downloaded {len(files)} files from {dataset_name}"
+                logger.info(log_msg)
+                info_content.append(f"  - {log_msg}")
+                info_content.append(f"    Output file: {geojson_filename}.laz")
+            else:
+                log_msg = f"No data downloaded from {dataset_name}"
+                logger.warning(log_msg)
+                info_content.append(f"  - {log_msg}")
+            
+            # Add data source information
             info_content.append(f"")
-            info_content.append(f"Data Sources:")
-            for dataset_name, count in coverage_info.items():
-                info_content.append(f"  - {dataset_name}: {count} files")
+            info_content.append(f"Data Source:")
+            info_content.append(f"  - {dataset_name}: {len(files) if files else 0} files")
         else:
             # Download from all datasets separately - no merging
             for dataset in datasets:
@@ -344,120 +326,8 @@ def main():
             if downloaded_files:
                 info_content.append(f"")
                 info_content.append(f"Each dataset was downloaded to a separate file.")
-                info_content.append(f"No merging was performed because --most-recent flag was not used.")
         
-        # When using --most-recent, we need to merge the files
-        if args.most_recent and downloaded_files:
-            info_content.append(f"")
-            
-            # Define the final output file
-            merged_file = str(output_dir / f"{geojson_filename}.laz")
-            
-            # For multiple files, merge them
-            if len(downloaded_files) > 1:
-                info_content.append(f"Merging Files:")
-                logger.info("Merging downloaded LAZ files")
-            else:
-                # For single file, just copy/move to final location
-                info_content.append(f"Processing File:")
-                logger.info("Processing downloaded LAZ file")
-        
-            # Create a year mapping for each file
-            year_mapping = {}
-            for file, info in file_source_map.items():
-                # Use the actual year value from the dataset information
-                year_mapping[file] = info['year']
-                
-            # Add the mapping information to the info file
-            import os  # Ensure os is imported here for os.path.basename
-            info_content.append(f"")
-            info_content.append(f"Year Mapping for Points:")
-            for file, info in file_source_map.items():
-                short_path = os.path.basename(file)
-                info_content.append(f"  - {short_path}: Dataset={info['dataset']}, Year={info['year']}")
-        
-            # Process based on file count
-            if len(downloaded_files) == 1:
-                # Single file case - add year dimension and save to final location
-                source_file = downloaded_files[0]
-                log_msg = f"Only one dataset used, adding year dimension and saving to final location"
-                logger.info(log_msg)
-                info_content.append(f"  - {log_msg}")
-                
-                # Get year value from file source mapping
-                year = 0
-                if source_file in file_source_map:
-                    year = file_source_map[source_file]['year']
-                    
-                try:
-                    # If source and destination are the same, use a temporary file
-                    if source_file == merged_file:
-                        temp_file = f"{merged_file}.temp"
-                        
-                        # First add year dimension to temp file
-                        from .download import add_year_to_laz
-                        success = add_year_to_laz(source_file, temp_file, year)
-                        
-                        if success:
-                            # Then replace original with temp file
-                            import os
-                            if os.path.exists(merged_file):
-                                os.remove(merged_file)
-                            os.rename(temp_file, merged_file)
-                            logger.info(f"Added year {year} to {merged_file}")
-                        else:
-                            logger.error(f"Failed to add year dimension to {source_file}")
-                    else:
-                        # Add year dimension directly to the merged file location
-                        from .download import add_year_to_laz
-                        success = add_year_to_laz(source_file, merged_file, year)
-                        logger.info(f"Added year {year} to {merged_file}")
-                except Exception as e:
-                    logger.error(f"Error processing file: {str(e)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                    success = False
-            else:
-                # Multiple files case - merge them with year attribute
-                logger.info(f"Merging files with year attribute for identifying source datasets")
-                success = merge_laz_files(downloaded_files, merged_file, year_mapping)
-        
-            if success:
-                point_count = get_point_count(merged_file)
-                file_size = os.path.getsize(merged_file) / (1024 * 1024)  # Convert to MB
-                log_msg = f"Successfully merged files into {merged_file}: {file_size:.2f} MB, {point_count} points"
-                logger.info(log_msg)
-                info_content.append(f"  - {log_msg}")
-        
-                # Add appropriate information about file sources
-                if len(downloaded_files) > 1:
-                    info_content.append(f"  - Final LAZ file contains data from multiple USGS datasets")
-                else:
-                    dataset_name = list(file_source_map.values())[0]['dataset']
-                    dataset_year = list(file_source_map.values())[0]['year']
-                    info_content.append(f"  - Final LAZ file contains data from {dataset_name} ({dataset_year})")
-                
-                info_content.append(f"  - Check visualization file for coverage information")
-        
-                # Clean up temp files unless --keep-temp was specified
-                if not args.keep_temp:
-                    try:
-                        # Use shutil.rmtree for a more robust directory cleanup
-                        import shutil
-                        if temp_dir.exists():
-                            logger.info(f"Cleaning up temporary directory: {temp_dir}")
-                            shutil.rmtree(temp_dir, ignore_errors=True)
-                            logger.info("Temporary directory cleaned up successfully")
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up temp directory: {str(e)}")
-            else:
-                log_msg = f"Failed to merge files"
-                logger.error(log_msg)
-                info_content.append(f"  - {log_msg}")
-                # Write info file
-                with open(info_file, 'w') as f:
-                    f.write('\n'.join(info_content))
-                return 1
+        # When using --most-recent, no merging is needed - we only downloaded from one dataset
         
         # Write info file
         with open(info_file, 'w') as f:
