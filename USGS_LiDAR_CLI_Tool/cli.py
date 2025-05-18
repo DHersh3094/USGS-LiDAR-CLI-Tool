@@ -23,7 +23,7 @@ from shapely.geometry import shape, box, mapping
 from shapely.ops import unary_union
 
 from .boundaries import find_intersecting_datasets
-from .download import download_lidar_data, merge_laz_files, get_point_count
+from .download import download_lidar_data, get_point_count
 from .config import load_config
 from .visualization import create_coverage_map, verify_dataset_coverage
 
@@ -243,22 +243,6 @@ def main():
             if files:
                 downloaded_files.extend(files)
                 
-                # Add year information to each file
-                for file in files:
-                    year = dataset.get('year', 0)
-                    
-                    try:
-                        # Add year dimension to the file
-                        from .download import add_year_to_laz
-                        success = add_year_to_laz(file, file, year)
-                        
-                        if success:
-                            logger.info(f"Added year {year} to {file}")
-                        else:
-                            logger.warning(f"Failed to add year dimension to {file}, but file was still downloaded")
-                    except Exception as e:
-                        logger.warning(f"Error adding year to {file}: {str(e)}")
-                
                 # Log success
                 log_msg = f"Successfully downloaded {len(files)} files from {dataset_name}"
                 logger.info(log_msg)
@@ -293,21 +277,6 @@ def main():
                 )
                 
                 if files:
-                    # Add year information to each file
-                    for file in files:
-                        year = dataset.get('year', 0)
-                        
-                        try:
-                            # Add year dimension to the file
-                            from .download import add_year_to_laz
-                            success = add_year_to_laz(file, file, year)
-                            
-                            if success:
-                                logger.info(f"Added year {year} to {file}")
-                            else:
-                                logger.warning(f"Failed to add year dimension to {file}, but file was still downloaded")
-                        except Exception as e:
-                            logger.warning(f"Error adding year to {file}: {str(e)}")
                     
                     # Keep track of all downloaded files
                     downloaded_files.extend(files)
