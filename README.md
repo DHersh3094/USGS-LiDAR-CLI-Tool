@@ -3,7 +3,7 @@
 A command-line interface tool for downloading USGS LiDAR data based on GeoJSON boundaries.
 
 ## Data Source
-Data is accessed via the Registry of open data on AWS. See For more details, see the [USGS 3DEP LiDAR Point Clouds](https://registry.opendata.aws/usgs-lidar/) for information on how to cite.
+Data is accessed via the Registry of open data on AWS. For more details and information on how to cite see the [USGS 3DEP LiDAR Point Clouds](https://registry.opendata.aws/usgs-lidar/)
 
 ## Features
 
