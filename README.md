@@ -2,6 +2,9 @@
 
 A command-line interface tool for downloading USGS LiDAR data based on GeoJSON boundaries.
 
+## Data Source
+Data is accessed via the Registry of open data on AWS. See For more details, see the [USGS 3DEP LiDAR Point Clouds](https://registry.opendata.aws/usgs-lidar/) for information on how to cite.
+
 ## Features
 
 - Download LiDAR data from USGS 3DEP datasets using GeoJSON boundary files
@@ -9,7 +12,6 @@ A command-line interface tool for downloading USGS LiDAR data based on GeoJSON b
 - Create visualizations with basemaps showing data coverage and overlaps
 - Support for prioritizing the most recent datasets
 - Dry-run mode to check for available data without downloading
-- Efficient handling of data from multiple sources
 
 ## Coverage
 - Coverage is based on the USGS public lidar boundaries at: https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resources.geojson
@@ -65,12 +67,6 @@ After installation, you may need to run `source ~/.bashrc` to update your curren
 
 ## Usage
 
-### Basic Usage
-
-```bash
-USGS-LiDAR-CLI-Tool --geojson your_boundary.geojson --output-dir output_directory
-```
-
 ### Command Line Options
 
 - `--geojson`, `-g`: Path to input GeoJSON file defining the boundary (required)
@@ -78,7 +74,11 @@ USGS-LiDAR-CLI-Tool --geojson your_boundary.geojson --output-dir output_director
 - `--dry-run`, `-d`: Find intersecting datasets but don't download files
 - `--resolution`, `-r`: Resolution to use for the data in Entwine Point Tile (EPT) format. Use 'full' for native resolution (all points), or specify a numeric value in coordinate units (meters) to control point spacing. For example, '1.0' will retrieve points with ~1m spacing, '0.5' creates denser point clouds, and '2.0' creates sparser data. Lower values = more detail and larger files.
 - `--coordinate-reference-system`, `-crs`: EPSG code to reproject laz files during download
-- `--classify_ground`: Add smrf ground classification (default: true)
+- `--classify-ground`: Add smrf ground classification (default: true)
+- `--outlier-filter`: Apply statistical outlier filter to point clouds during download removing noise points from the output. 
+For more details, see the [PDAL filters.outlier documentation](https://pdal.io/en/stable/stages/filters.outlier.html#filters-outlier).
+- `--outlier-mean-k`: Number of nearest neighbors to consider for outlier filter (default: 12)
+- `--outlier-multiplier`: Standard deviation multiplier threshold for outlier filter (default: 2.2)
 - `--verbose`, `-v`: Enable verbose logging
 - `--most-recent`: Use only the most recent data when multiple datasets overlap
 - `--no-visualization`: Skip creating visualization of datasets and boundary
@@ -94,33 +94,63 @@ Creates an image:
 ![Demo Coverage](images/demo_coverage.png)
 
 
-Then download all intersecting pointclouds (in this case only 1) with a target CRS:
+Then download all intersecting pointclouds (in this case only 1) with a target CRS and an outlier filter:
 ```bash
-USGS-LiDAR-CLI-Tool --geojson demo.geojson -crs 32617
+USGS-LiDAR-CLI-Tool --geojson demo.geojson \
+--coordinate-reference-system 32617 \
+--outlier-filter
 ```
 
 Logs are saved to `demo_info.txt`
 ```
 USGS LiDAR Downloader Report
-Generated on: 2025-05-16 20:15:09
+Generated on: 2025-05-18 11:37:24
 Input GeoJSON: demo.geojson
 
 Intersecting Datasets (1):
-  1. FL_Peninsular_FDEM_Nassau_2018 (2018.0)
+  1. PA_WesternPA_2_2019 (2019.0)
 
 Download Strategy: All intersecting datasets
 
 Download Log:
-  - Successfully downloaded 1 files from FL_Peninsular_FDEM_Nassau_2018
-    Output file: demo_FL_Peninsular_FDEM_Nassau_2018.laz
+  - Successfully downloaded 1 files from PA_WesternPA_2_2019
+    Output file: demo_PA_WesternPA_2_2019.laz
 
 Each dataset was downloaded to a separate file.
-No merging was performed because --most-recent flag was not used.
 ```
 
-Download using only the most recent datasets if there are more than 1 intersecting. **Not guaranteed to get the actual most recent due to the date parsing bug. Easier to just skip this flag for now**:
-```bash
-USGS-LiDAR-CLI-Tool --geojson area.geojson --most-recent
+A copy of the PDAL pipeline is also saved as `demo_PA_WesternPA_2_2019_pipeline.json`:
+
+```json
+{
+    "pipeline": [
+        {
+            "type": "readers.ept",
+            "filename": "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/PA_WesternPA_2_2019/ept.json",
+            "polygon": "{\"coordinates\": [[[-80.00830228623919, 40.44337798148942], [-80.01436057451653, 40.4419411606153], [-80.01031232296975, 40.43973940536199], [-80.00837742779959, 40.44184108239551], [-80.00830228623919, 40.44337798148942]]], \"type\": \"Polygon\"}"
+        },
+        {
+            "type": "filters.reprojection",
+            "out_srs": "EPSG:32617"
+        },
+        {
+            "type": "filters.outlier",
+            "method": "statistical",
+            "mean_k": 12,
+            "multiplier": 2.2
+        },
+        {
+            "type": "filters.range",
+            "limits": "Classification![7:7]"
+        },
+        {
+            "type": "writers.las",
+            "filename": "lidar_data/demo/demo_PA_WesternPA_2_2019.laz",
+            "minor_version": 4,
+            "dataformat_id": 8
+        }
+    ]
+}
 ```
 
 ## Output
@@ -129,6 +159,7 @@ The tool creates an organized directory structure:
 - Each GeoJSON input gets its own subfolder
 - Visualizations show dataset coverage
 - Detailed info.txt file with dataset information
+- Copy of the PDAL pipeline
 - LAZ files are named after the input GeoJSON
 
 ## Known Issues and Bugs
@@ -139,6 +170,8 @@ The tool creates an organized directory structure:
 
 ## To do:
 - Add bulk download support using an input GeoPackage
+- Add other PDAL commands to pipeline
+- Colorization based on best matching NAIP imagery
 
 ## License
 

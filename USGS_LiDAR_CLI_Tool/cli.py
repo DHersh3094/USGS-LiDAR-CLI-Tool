@@ -96,6 +96,18 @@ def main():
         help="EPSG code for output coordinate reference system (e.g., '32615'). "
              "The downloaded LAZ files will be reprojected to this CRS."
     )
+    parser.add_argument(
+        "--outlier-filter", action="store_true",
+        help="Apply statistical outlier filter to point clouds during download"
+    )
+    parser.add_argument(
+        "--outlier-mean-k", type=int, default=12,
+        help="Number of nearest neighbors to consider for outlier filter (default: 12)"
+    )
+    parser.add_argument(
+        "--outlier-multiplier", type=float, default=2.2,
+        help="Standard deviation multiplier threshold for outlier filter (default: 2.2)"
+    )
     # Removed the --coverage-method option as requested
     
     args = parser.parse_args()
@@ -128,6 +140,12 @@ def main():
             config["classify_ground"] = True
         if args.coordinate_reference_system:
             config["coordinate_reference_system"] = args.coordinate_reference_system
+        if args.outlier_filter:
+            config["outlier_filter"] = True
+        if args.outlier_mean_k:
+            config["outlier_mean_k"] = args.outlier_mean_k
+        if args.outlier_multiplier:
+            config["outlier_multiplier"] = args.outlier_multiplier
         # Coverage method removed - simplified approach used
         
         # Load the input GeoJSON
@@ -230,6 +248,9 @@ def main():
             # Create output directory for this dataset
             dataset_dir = output_dir
             
+            # Create a unique filename for this dataset that includes the dataset name
+            unique_filename = f"{geojson_filename}_{dataset_name}"
+            
             # Download data for this dataset
             logger.info(f"Downloading data from {dataset_name}")
             files = download_lidar_data(
@@ -237,7 +258,7 @@ def main():
                 dataset=dataset,
                 output_dir=str(dataset_dir),
                 config=config,
-                geojson_filename=geojson_filename
+                geojson_filename=unique_filename
             )
             
             if files:
@@ -247,7 +268,7 @@ def main():
                 log_msg = f"Successfully downloaded {len(files)} files from {dataset_name}"
                 logger.info(log_msg)
                 info_content.append(f"  - {log_msg}")
-                info_content.append(f"    Output file: {geojson_filename}.laz")
+                info_content.append(f"    Output file: {unique_filename}.laz")
             else:
                 log_msg = f"No data downloaded from {dataset_name}"
                 logger.warning(log_msg)

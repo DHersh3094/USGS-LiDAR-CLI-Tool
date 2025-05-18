@@ -247,7 +247,10 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
                         bounds: Optional[List[float]] = None, 
                         resolution: Optional[Union[float, str]] = None,
                         classify_ground: bool = False,
-                        coordinate_reference_system: Optional[str] = None) -> Dict[str, Any]:
+                        coordinate_reference_system: Optional[str] = None,
+                        outlier_filter: bool = False,
+                        outlier_mean_k: int = 12,
+                        outlier_multiplier: float = 2.2) -> Dict[str, Any]:
     """
     Create a PDAL pipeline definition for processing EPT data.
     
@@ -331,6 +334,26 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
         }
         pipeline_stages.append(range_filter)
     
+    # Add statistical outlier filter if requested
+    if outlier_filter:
+        outlier_filter_stage = {
+            "type": "filters.outlier",
+            "method": "statistical",
+            "mean_k": outlier_mean_k,
+            "multiplier": outlier_multiplier
+        }
+        pipeline_stages.append(outlier_filter_stage)
+        
+        # Add a range filter to remove points classified as noise (class 7)
+        # This effectively removes the outliers identified by the outlier filter
+        range_filter = {
+            "type": "filters.range",
+            "limits": "Classification![7:7]"  # Exclude class 7 (noise)
+        }
+        pipeline_stages.append(range_filter)
+        
+        logger.info(f"Added statistical outlier filter with mean_k={outlier_mean_k}, multiplier={outlier_multiplier}, removing outliers with classification filter")
+    
     # Add writer as the final stage
     writer = {
         "type": "writers.las",
@@ -355,13 +378,15 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
     return pipeline
 
 
-def run_pdal_pipeline(pipeline: Dict[str, Any], min_points: int = 100) -> Tuple[bool, int]:
+def run_pdal_pipeline(pipeline: Dict[str, Any], min_points: int = 100, 
+                     output_dir: Optional[str] = None) -> Tuple[bool, int]:
     """
     Run a PDAL pipeline using subprocess.
     
     Args:
         pipeline: PDAL pipeline definition
         min_points: Minimum number of points required for a successful result
+        output_dir: Optional output directory to save a copy of the pipeline JSON
         
     Returns:
         tuple: (success, point_count)
@@ -373,13 +398,27 @@ def run_pdal_pipeline(pipeline: Dict[str, Any], min_points: int = 100) -> Tuple[
         
         with open(pipeline_file, "w") as f:
             json.dump(pipeline, f, indent=4)
+        
+        # If output_dir is provided, save a copy of the pipeline for reference
+        if output_dir and os.path.isdir(output_dir):
+            output_laz = pipeline["pipeline"][-1]["filename"]
+            output_basename = os.path.basename(output_laz).replace('.laz', '')
+            pipeline_copy_path = os.path.join(output_dir, f"{output_basename}_pipeline.json")
+            
+            try:
+                # Save a pretty-printed version of the pipeline
+                with open(pipeline_copy_path, "w") as f:
+                    json.dump(pipeline, f, indent=4)
+                logger.info(f"Saved pipeline definition to {pipeline_copy_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save pipeline copy: {str(e)}")
             
         # Run PDAL pipeline using subprocess
         cmd = ["pdal", "pipeline", pipeline_file]
         
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
-        # Clean up temporary file
+        # Clean up temporary file - only remove the temp file, not the saved copy
         try:
             os.remove(pipeline_file)
         except:
@@ -388,16 +427,15 @@ def run_pdal_pipeline(pipeline: Dict[str, Any], min_points: int = 100) -> Tuple[
         laz_file = pipeline["pipeline"][-1]["filename"]
         
         if result.returncode == 0:
-            # Check if the file has enough points
+            # If PDAL pipeline ran successfully, consider it a success
+            # Get the point count just for logging purposes
             point_count = get_point_count(laz_file)
             
-            if point_count >= min_points:
-                return True, point_count
-            else:
-                # Clean up the file if it exists but has too few points
-                if os.path.exists(laz_file) and point_count < min_points:
-                    os.remove(laz_file)
-                return False, point_count
+            if point_count == 0:
+                logger.warning(f"Pipeline successful but output file contains 0 points: {laz_file}")
+            
+            # Always return success if the pipeline executed without errors
+            return True, point_count
         else:
             logger.error(f"PDAL pipeline failed: {result.stderr}")
             return False, 0
@@ -559,6 +597,14 @@ def download_dataset(boundary_geojson: Dict[str, Any], dataset: Dict[str, Any],
         if coordinate_reference_system:
             logger.info(f"Using coordinate reference system: {coordinate_reference_system}")
             
+        # Get outlier filter parameters from config if specified
+        outlier_filter = config.get('outlier_filter', False)
+        outlier_mean_k = config.get('outlier_mean_k', 12)
+        outlier_multiplier = config.get('outlier_multiplier', 2.2)
+        
+        if outlier_filter:
+            logger.info(f"Using statistical outlier filter with mean_k={outlier_mean_k}, multiplier={outlier_multiplier}")
+            
         # Create pipeline using the boundary directly
         pipeline = create_pdal_pipeline(
             input_url=ept_url,
@@ -566,22 +612,27 @@ def download_dataset(boundary_geojson: Dict[str, Any], dataset: Dict[str, Any],
             boundary_geojson=boundary_geojson,
             resolution=resolution,
             classify_ground=classify_ground,
-            coordinate_reference_system=coordinate_reference_system
+            coordinate_reference_system=coordinate_reference_system,
+            outlier_filter=outlier_filter,
+            outlier_mean_k=outlier_mean_k,
+            outlier_multiplier=outlier_multiplier
         )
         
         # Run the pipeline
         logger.info(f"Processing dataset: {dataset_name}")
-        success, point_count = run_pdal_pipeline(pipeline, min_points)
+        success, point_count = run_pdal_pipeline(pipeline, min_points, output_dir)
         
         if success:
-            file_size = os.path.getsize(output_file) / (1024 * 1024)  # Convert to MB
-            logger.info(f"Dataset {dataset_name}: {file_size:.2f} MB, {point_count} points")
-            return [output_file]
-        else:
-            if point_count == 0:
-                logger.info(f"Dataset {dataset_name}: No points found in the boundary area")
+            # If file exists, return it regardless of point count
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file) / (1024 * 1024)  # Convert to MB
+                logger.info(f"Dataset {dataset_name}: {file_size:.2f} MB, {point_count} points")
+                return [output_file]
             else:
-                logger.info(f"Dataset {dataset_name}: Only {point_count} points (below threshold)")
+                logger.warning(f"Pipeline reported success but output file does not exist: {output_file}")
+                return []
+        else:
+            logger.info(f"Pipeline failed for dataset {dataset_name}")
             return []
     
     except Exception as e:
