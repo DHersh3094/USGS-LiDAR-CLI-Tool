@@ -74,7 +74,7 @@ After installation, you may need to run `source ~/.bashrc` to update your curren
 - `--dry-run`, `-d`: Find intersecting datasets but don't download files
 - `--resolution`, `-r`: Resolution to use for the data in Entwine Point Tile (EPT) format. Use 'full' for native resolution (all points), or specify a numeric value in coordinate units (meters) to control point spacing. For example, 1.0 will retrieve points with ~1m spacing, 0.5 creates denser point clouds, and 2.0 creates sparser data. Lower values = more detail and larger files. (default: 'full')
 - `--coordinate-reference-system`, `-crs`: EPSG code to reproject laz files during download
-- `--classify-ground`: Add smrf ground classification (default: true)
+- `--classify-ground`: Add smrf ground classification (default: false)
 - `--outlier-filter`: Apply statistical outlier filter to point clouds during download removing noise points from the output. 
 For more details, see the [PDAL filters.outlier documentation](https://pdal.io/en/stable/stages/filters.outlier.html#filters-outlier).
 - `--outlier-mean-k`: Number of nearest neighbors to consider for outlier filter (default: 12)
