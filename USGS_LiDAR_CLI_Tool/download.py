@@ -326,13 +326,6 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
             "returns": "last, only"
         }
         pipeline_stages.append(smrf_filter)
-        
-        # Add a range filter to properly assign classification values
-        range_filter = {
-            "type": "filters.range",
-            "limits": "Classification[2:2]"
-        }
-        pipeline_stages.append(range_filter)
     
     # Add statistical outlier filter if requested
     if outlier_filter:
