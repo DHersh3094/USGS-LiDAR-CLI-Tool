@@ -317,6 +317,19 @@ def create_pdal_pipeline(input_url: str, output_laz: str,
     
     # Add SMRF ground classification if requested
     if classify_ground:
+        
+        # Fix return number issue
+        # https://gis.stackexchange.com/questions/456806/how-to-correct-pdal-error-using-filters-smrf-some-numberofreturns-or-returnnumb
+        smrf_assignment = {
+        "type": "filters.assign",
+        "value": [
+        "ReturnNumber = 1 WHERE ReturnNumber < 1",
+        "NumberOfReturns = 1 WHERE NumberOfReturns < 1"
+        ]
+        }
+        
+        pipeline_stages.append(smrf_assignment)
+        
         smrf_filter = {
             "type": "filters.smrf",
             "window": 18.0,
