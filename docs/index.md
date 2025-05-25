@@ -29,7 +29,7 @@ Data is accessed via the Registry of Open Data on AWS. For more details and info
 
 <script>
 // Initialize the map
-var map = L.map('map').setView([39.8283, -95.088], 4); // Center on USA
+var map = L.map('map').setView([39.8283, -90.075], 4); // Center on USA
 
 // Add OpenStreetMap tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
