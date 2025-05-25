@@ -73,7 +73,7 @@ fetch('https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resou
     .catch(error => {
         console.error('Error loading GeoJSON data:', error);
         L.popup()
-            .setLatLng([39.82, -96.22])
+            .setLatLng([39.82, -88.05])
             .setContent("Error loading coverage data. Please check your internet connection.")
             .openOn(map);
     });
