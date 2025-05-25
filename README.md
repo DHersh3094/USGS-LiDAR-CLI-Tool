@@ -15,7 +15,7 @@ Data is accessed via the Registry of open data on AWS. For more details and info
 
 ## Coverage
 - Coverage is based on the USGS public lidar boundaries at: https://raw.githubusercontent.com/hobu/usgs-lidar/master/boundaries/resources.geojson
-- Some areas have no coverage. See `usgs_lidar_boundaries.gpkg`
+- Some areas have no coverage. Checke the [Interactive map](https://dhersh3094.github.io/USGS-LiDAR-CLI-Tool/#coverage) or see `usgs_lidar_boundaries.gpkg` for more information.
 
 ## Installation
 
