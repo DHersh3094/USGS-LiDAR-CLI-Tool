@@ -153,7 +153,7 @@ USGS-LiDAR-CLI-Tool --geojson demo.geojson --dry-run
 ```
 
 Creates an image:
-![Demo Coverage](../images/demo_coverage.png)
+![Demo Coverage](/images/demo_coverage.png)
 
 
 Then download all intersecting pointclouds (in this case only 1) with a target CRS and an outlier filter:
